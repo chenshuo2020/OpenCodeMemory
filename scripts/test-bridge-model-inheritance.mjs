@@ -550,6 +550,24 @@ globalThis.fetch = async (input, init = {}) => {
       headers: { "Content-Type": "application/json" },
     });
   }
+  if (url.pathname === "/api/plugin/prompt") {
+    return new Response(JSON.stringify({ success: true, promptId: "test-prompt" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (url.pathname === "/api/plugin/profile-learning/prepare") {
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: { ready: false, busy: false, count: 0, threshold: 10 },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
   if (url.pathname === "/api/migration/tags/claim") {
     const claim = nextTagMigrationClaim;
     nextTagMigrationClaim = null;

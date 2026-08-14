@@ -21,12 +21,14 @@ type CaptureModel = {
 
 const INTERNAL_CAPTURE_TITLE = "OpenCode Memory Auto Capture";
 const INTERNAL_TAG_MIGRATION_TITLE = "OpenCode Memory Tag Migration";
+const INTERNAL_PROFILE_LEARNING_TITLE = "OpenCode Memory User Profile Learning";
 const INTERNAL_SESSION_RETENTION_MS = 5 * 60 * 1000;
 const TAG_MIGRATION_MAX_PER_RUN = 8;
 const TAG_MIGRATION_BETWEEN_ITEMS_MS = 250;
 const TAG_MIGRATION_CONTINUATION_MS = 2_000;
 const TAG_MIGRATION_RETRY_MS = 60_000;
 const TAG_MIGRATION_MIN_RETRY_MS = 1_000;
+const PROFILE_LEARNING_MAX_CONTEXT_CHARS = 28_000;
 const INTERNAL_SESSIONS = new Set<string>();
 const INTERNAL_SESSION_RELEASE_TIMERS = new Map<string, ReturnType<typeof setTimeout>>();
 const ACTIVE_CAPTURE_SESSIONS = new Set<string>();
@@ -35,6 +37,7 @@ const SESSION_MODELS = new Map<string, CaptureModel>();
 const TAG_MIGRATION_WORKER_ID = `opencode-mem-bridge-${process.pid}-${randomUUID()}`;
 let tagMigrationRunning = false;
 let tagMigrationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let profileLearningRunning = false;
 
 type TagMigrationClaim = {
   claimId: string;
@@ -51,6 +54,40 @@ type TagMigrationStatus = {
   deferred: number;
   nextAttemptAt?: number | null;
   lastError: string | null;
+};
+
+type ProfileLearningPrompt = {
+  id: string;
+  content: string;
+  createdAt: number;
+  providerId?: string | null;
+  modelId?: string | null;
+};
+
+type ProfileLearningBatch = {
+  ready: boolean;
+  busy?: boolean;
+  leaseId?: string;
+  expiresAt?: number;
+  count: number;
+  threshold: number;
+  prompts?: ProfileLearningPrompt[];
+  user?: {
+    userId: string;
+    displayName: string;
+    userName: string;
+    userEmail: string;
+  };
+  profile?: {
+    id: string;
+    version: number;
+    totalPromptsAnalyzed: number;
+    profileData: {
+      preferences?: unknown[];
+      patterns?: unknown[];
+      workflows?: unknown[];
+    };
+  } | null;
 };
 
 function normalizeCaptureModel(value: any): CaptureModel | undefined {
@@ -91,7 +128,13 @@ async function isInternalCaptureSession(ctx: BridgeContext, sessionID: string): 
   try {
     const response = await ctx.client.session.get({ path: { id: sessionID } });
     const title = extractSessionTitle(response);
-    if (title !== INTERNAL_CAPTURE_TITLE && title !== INTERNAL_TAG_MIGRATION_TITLE) return false;
+    if (
+      title !== INTERNAL_CAPTURE_TITLE &&
+      title !== INTERNAL_TAG_MIGRATION_TITLE &&
+      title !== INTERNAL_PROFILE_LEARNING_TITLE
+    ) {
+      return false;
+    }
     markInternalSession(sessionID);
     return true;
   } catch {
@@ -198,6 +241,57 @@ function textFromParts(parts: any[]): string {
     .trim();
 }
 
+function userPromptTextFromParts(parts: any[]): string {
+  return parts
+    .filter(
+      (part) =>
+        part?.type === "text" &&
+        typeof part.text === "string" &&
+        part.synthetic !== true
+    )
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+}
+
+async function saveUserPrompt(
+  ctx: BridgeContext,
+  input: any,
+  output: any,
+  model?: CaptureModel
+): Promise<void> {
+  const content = userPromptTextFromParts(output?.parts || []);
+  const messageID = output?.message?.id;
+  if (!content || !messageID || !input?.sessionID) return;
+
+  const result = await rpc<{
+    success: boolean;
+    skipped?: boolean;
+    promptId?: string;
+    error?: string;
+  }>("/api/plugin/prompt", {
+    method: "POST",
+    body: JSON.stringify({
+      directory: ctx.directory || process.cwd(),
+      sessionID: input.sessionID,
+      messageID,
+      content,
+      providerID: model?.providerID,
+      modelID: model?.modelID,
+    }),
+  });
+  if (!result.success) {
+    throw new Error(result.error || "Memory service rejected user prompt");
+  }
+  await logBridge(
+    ctx,
+    "info",
+    result.skipped
+      ? `User prompt skipped for ${input.sessionID}: private or empty content`
+      : `User prompt saved for ${input.sessionID}${result.promptId ? ` as ${result.promptId}` : ""}`
+  );
+}
+
 function isMemoryInjection(parts: any[]): boolean {
   return parts.some((part) => part?.synthetic === true && part?.text?.includes("<memory_context>"));
 }
@@ -222,6 +316,36 @@ async function injectContext(ctx: BridgeContext, sessionID: string, output: any)
   });
 }
 
+async function saveSessionUserPrompts(
+  ctx: BridgeContext,
+  sessionID: string,
+  messages: any[],
+  fallbackModel?: CaptureModel
+): Promise<void> {
+  for (const message of messages) {
+    const info = message?.info;
+    if (!info || info.role !== "user" || info.summary === true || info.mode === "compaction") {
+      continue;
+    }
+    const messageID = info.id || message?.id;
+    const content = userPromptTextFromParts(message?.parts || []);
+    if (!messageID || !content) continue;
+    try {
+      await saveUserPrompt(
+        ctx,
+        {
+          sessionID,
+          model: normalizeCaptureModel(info.model) || normalizeCaptureModel(info) || fallbackModel,
+        },
+        { message: { id: messageID }, parts: message.parts || [] },
+        normalizeCaptureModel(info.model) || normalizeCaptureModel(info) || fallbackModel
+      );
+    } catch (error) {
+      await logServiceError(ctx, `Historical user prompt capture failed: ${String(error)}`);
+    }
+  }
+}
+
 async function captureSession(
   ctx: BridgeContext,
   sessionID: string,
@@ -237,6 +361,7 @@ async function captureSession(
   const messagesResponse = await ctx.client.session.messages({ path: { id: sessionID } });
   const messages = messagesResponse?.data || [];
   const captureModel = getCaptureModel(messages) || SESSION_MODELS.get(sessionID);
+  await saveSessionUserPrompts(ctx, sessionID, messages, captureModel);
   // Tag migration does not depend on whether this idle event produces a new
   // capture. Resolve the model before duplicate/empty-transcript checks so a
   // quiet existing conversation can still wake the background migration queue.
@@ -557,6 +682,206 @@ async function runTagMigration(ctx: BridgeContext, model: CaptureModel): Promise
   await scheduleTagMigrationFromStatus(ctx, model, attempted, queueFailed);
 }
 
+function balancedJsonObjects(text: string): string[] {
+  const objects: string[] = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === "{") {
+      if (depth === 0) start = index;
+      depth++;
+      continue;
+    }
+    if (character === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        objects.push(text.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+  return objects;
+}
+
+function parseProfileAnalysis(text: string): Record<string, unknown> {
+  const candidates = [
+    text.trim(),
+    text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim() || "",
+    ...balancedJsonObjects(text).reverse(),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const value = parsed as Record<string, unknown>;
+        if (value.analysis && typeof value.analysis === "object") {
+          return value.analysis as Record<string, unknown>;
+        }
+        if ("preferences" in value || "patterns" in value || "workflows" in value) {
+          return value;
+        }
+      }
+    } catch {
+      // Continue with the next JSON candidate. Providers sometimes wrap JSON in prose.
+    }
+  }
+
+  throw new Error("The model returned no valid user profile JSON");
+}
+
+function profileAnalysisPrompt(batch: ProfileLearningBatch): string {
+  const existingProfile = batch.profile?.profileData;
+  const prompts = (batch.prompts || [])
+    .map((prompt, index) => `${index + 1}. ${prompt.content}`)
+    .join("\n\n");
+  const existing = existingProfile
+    ? JSON.stringify(existingProfile).slice(0, PROFILE_LEARNING_MAX_CONTEXT_CHARS / 2)
+    : "No existing profile. Create one from the recent prompts.";
+  const body = `# User Profile Analysis
+
+Analyze the recent user prompts below to ${existingProfile ? "update" : "create"} a persistent profile for a coding assistant.
+
+${existingProfile ? `Existing profile (use it only as context and do not repeat entries without new evidence):\n${existing}` : existing}
+
+## Recent user prompts
+${prompts}
+
+## Rules
+- Detect the language used in the recent prompts and write every description and category in that same language.
+- Only record stable preferences, recurring topics, or genuinely repeatable workflows grounded in these prompts.
+- Do not record one-off errors, temporary setup details, credentials, secrets, or private content.
+- A preference needs a concise category, a specific description, confidence from 0 to 1, and one to three short evidence strings.
+- A pattern needs a concise category and description.
+- A workflow needs a concise description and three to six concrete steps.
+- Return empty arrays when there is not enough evidence. Do not invent facts.
+- Return JSON only, with exactly this top-level shape:
+{
+  "preferences": [{"category":"...","description":"...","confidence":0.4,"evidence":["..."]}],
+  "patterns": [{"category":"...","description":"..."}],
+  "workflows": [{"description":"...","steps":["step 1","step 2","step 3"]}]
+}`;
+  return body.slice(0, PROFILE_LEARNING_MAX_CONTEXT_CHARS);
+}
+
+async function createUserProfileAnalysis(
+  ctx: BridgeContext,
+  model: CaptureModel,
+  batch: ProfileLearningBatch
+): Promise<Record<string, unknown>> {
+  if (
+    !ctx.client?.session?.create ||
+    !ctx.client?.session?.prompt ||
+    !ctx.client?.session?.messages
+  ) {
+    throw new Error("OpenCode session API is unavailable for user profile learning");
+  }
+
+  const created = await ctx.client.session.create({
+    body: { title: INTERNAL_PROFILE_LEARNING_TITLE },
+  });
+  const profileSessionID = created?.data?.id || created?.id;
+  if (!profileSessionID) throw new Error("OpenCode did not return a profile learning session id");
+  markInternalSession(profileSessionID);
+
+  try {
+    await ctx.client.session.prompt({
+      path: { id: profileSessionID },
+      body: {
+        model,
+        parts: [{ type: "text", text: profileAnalysisPrompt(batch) }],
+      },
+    });
+    const generated = await ctx.client.session.messages({ path: { id: profileSessionID } });
+    const assistantText = (generated?.data || [])
+      .filter((message: any) => message?.info?.role === "assistant")
+      .map((message: any) => textFromParts(message.parts || []))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    return parseProfileAnalysis(assistantText);
+  } finally {
+    if (typeof ctx.client.session.delete === "function") {
+      await ctx.client.session.delete({ path: { id: profileSessionID } }).catch(() => {});
+    }
+    releaseInternalSessionLater(profileSessionID);
+  }
+}
+
+async function runUserProfileLearning(ctx: BridgeContext, model: CaptureModel): Promise<void> {
+  if (profileLearningRunning) return;
+  profileLearningRunning = true;
+  let leaseId: string | undefined;
+
+  try {
+    const prepared = await rpc<{
+      success: boolean;
+      data?: ProfileLearningBatch;
+      error?: string;
+    }>("/api/plugin/profile-learning/prepare", {
+      method: "POST",
+      body: JSON.stringify({ directory: ctx.directory || process.cwd() }),
+    });
+    if (!prepared.success) throw new Error(prepared.error || "Profile learning prepare failed");
+
+    const batch = prepared.data;
+    if (!batch?.ready || !batch.leaseId || !batch.prompts?.length) return;
+    leaseId = batch.leaseId;
+
+    const analysis = await createUserProfileAnalysis(ctx, model, batch);
+    const completed = await rpc<{
+      success: boolean;
+      data?: { profileId: string; analyzedPrompts: number };
+      error?: string;
+    }>("/api/plugin/profile-learning/complete", {
+      method: "POST",
+      body: JSON.stringify({
+        directory: ctx.directory || process.cwd(),
+        leaseId,
+        promptIds: batch.prompts.map((prompt) => prompt.id),
+        analysis,
+      }),
+    });
+    if (!completed.success) {
+      throw new Error(completed.error || "Profile learning completion failed");
+    }
+    await logBridge(
+      ctx,
+      "info",
+      `User profile updated from ${completed.data?.analyzedPrompts || batch.prompts.length} prompts using ${model.providerID}/${model.modelID}`
+    );
+  } catch (error) {
+    if (leaseId) {
+      await rpc<{ success: boolean }>("/api/plugin/profile-learning/release", {
+        method: "POST",
+        body: JSON.stringify({ leaseId }),
+      }).catch(() => {});
+    }
+    await logServiceError(ctx, `Automatic user profile learning failed: ${String(error)}`);
+  } finally {
+    profileLearningRunning = false;
+  }
+}
+
 export const OpenCodeMemoryBridge: Plugin = async (ctx: any) => {
   const bridgeContext: BridgeContext = { directory: ctx.directory, client: ctx.client };
   await logBridge(
@@ -571,6 +896,11 @@ export const OpenCodeMemoryBridge: Plugin = async (ctx: any) => {
       if (!input.sessionID || INTERNAL_SESSIONS.has(input.sessionID)) return;
       const inputModel = normalizeCaptureModel(input.model);
       if (inputModel) SESSION_MODELS.set(input.sessionID, inputModel);
+      try {
+        await saveUserPrompt(bridgeContext, input, output, inputModel || SESSION_MODELS.get(input.sessionID));
+      } catch (error) {
+        await logServiceError(bridgeContext, `User prompt capture failed: ${String(error)}`);
+      }
       try {
         await injectContext(bridgeContext, input.sessionID, output);
       } catch (error) {
@@ -595,11 +925,15 @@ export const OpenCodeMemoryBridge: Plugin = async (ctx: any) => {
         void captureSession(bridgeContext, sessionID, (model) => {
           migrationModel = model;
         })
-          .catch((error) =>
+        .catch((error) =>
             logServiceError(bridgeContext, `Automatic capture failed: ${String(error)}`)
           )
           .finally(() => {
-            if (migrationModel) void runTagMigration(bridgeContext, migrationModel);
+            const resolvedModel = migrationModel || SESSION_MODELS.get(sessionID);
+            if (resolvedModel) {
+              void runTagMigration(bridgeContext, resolvedModel);
+              void runUserProfileLearning(bridgeContext, resolvedModel);
+            }
             ACTIVE_CAPTURE_SESSIONS.delete(sessionID);
           });
       }

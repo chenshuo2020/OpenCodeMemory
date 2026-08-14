@@ -69,6 +69,22 @@ export function SystemView() {
     setLoading(false);
   }, []);
 
+  async function waitForStatus(timeoutMs = 15000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const result = await fetchAPI<{ status: ServiceStatus }>("/api/system/status", {
+        timeout: 1000,
+      });
+      if (result.success && result.data?.status) {
+        setStatus(result.data.status);
+        setLoading(false);
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+  }
+
   useEffect(() => {
     void load();
     const timer = setInterval(() => void load(), 5000);
@@ -79,13 +95,42 @@ export function SystemView() {
     setWorking(true);
     setMessage(null);
     const native = window.opencodeMemDesktop?.service;
-    const result = native
-      ? await native[action]()
-      : { success: false, output: "Service controls are available in the desktop app." };
-    setMessage(result.success ? "Service action sent." : result.output || "Service action failed.");
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    await load();
-    setWorking(false);
+    if (!native) {
+      setMessage("Service controls are available only when this page is opened from the desktop app.");
+      setWorking(false);
+      return;
+    }
+
+    try {
+      const result = await native[action]();
+      if (!result.success) {
+        setMessage(result.output || "Service action failed.");
+        return;
+      }
+
+      if (action === "stop") {
+        // The page itself is served by the service. Do not immediately call the
+        // API after stopping it, otherwise a healthy stop is reported as a
+        // failed action and the buttons appear to do nothing.
+        setStatus(null);
+        setLoading(false);
+        setMessage("OpenCode Memory service stopped. Use Start to run it again.");
+        return;
+      }
+
+      const ready = await waitForStatus();
+      setMessage(
+        ready
+          ? action === "restart"
+            ? "OpenCode Memory service restarted."
+            : "OpenCode Memory service started."
+          : "The task action was sent, but the service has not become ready yet."
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWorking(false);
+    }
   }
 
   async function selfTest() {

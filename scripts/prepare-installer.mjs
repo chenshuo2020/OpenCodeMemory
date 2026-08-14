@@ -4,6 +4,8 @@ import { join, relative } from "node:path";
 
 const root = process.cwd();
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const desktopPackageJson = JSON.parse(await readFile(join(root, "desktop", "package.json"), "utf8"));
+const appVersion = desktopPackageJson.version || packageJson.version;
 const stagingRoot = join(root, "installer", "staging");
 const serviceStage = join(stagingRoot, "service");
 const serviceNodeModulesStage = join(serviceStage, "node_modules");
@@ -59,7 +61,7 @@ await mkdir(serviceStage, { recursive: true });
 await cp(join(root, "dist"), join(serviceStage, "dist"), { recursive: true });
 await writeFile(
   join(serviceStage, "package.json"),
-  `${JSON.stringify({ name: "opencode-memory-service", private: true, type: "module", version: packageJson.version }, null, 2)}\n`
+  `${JSON.stringify({ name: "opencode-memory-service", private: true, type: "module", version: appVersion }, null, 2)}\n`
 );
 
 for (const source of productionPackagePaths()) {
@@ -87,7 +89,7 @@ for (const file of [
   const target = join(wrapperStage, file);
   if (file === "OpenCodeMemoryService.ps1" || file === "OpenCodeMemoryService.mjs") {
     const content = await readFile(source, "utf8");
-    await writeFile(target, content.replaceAll("__APP_VERSION__", packageJson.version), "utf8");
+    await writeFile(target, content.replaceAll("__APP_VERSION__", appVersion), "utf8");
   } else {
     await cp(source, target);
   }

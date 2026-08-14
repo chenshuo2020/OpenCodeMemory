@@ -17,6 +17,7 @@ import { Toaster } from "$lib/components/ui/sonner";
 import { Textarea } from "$lib/components/ui/textarea";
 import { cycleLanguage, getLanguage, useI18n } from "$lib/i18n";
 import { initRouter, navigate, ROUTES, useAppView } from "$lib/router";
+import { APP_VERSION } from "$lib/version";
 
 const MEMORY_TYPES = [
   "",
@@ -33,12 +34,17 @@ const MEMORY_TYPES = [
 
 export default function App() {
   const { t } = useI18n();
+  const appTitle = `${t("brand")}(${APP_VERSION})`;
   const currentView = useAppView();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [langLabel, setLangLabel] = useState(getLanguage().toUpperCase());
 
   const explorer = useMemoriesExplorer();
   const profile = useUserProfile();
+
+  useEffect(() => {
+    document.title = appTitle;
+  }, [appTitle]);
 
   useEffect(() => {
     const stopRouter = initRouter();
@@ -99,7 +105,7 @@ export default function App() {
           open={sidebarOpen}
           onOpenChange={setSidebarOpen}
           currentView={currentView}
-          brand={t("brand")}
+          brand={appTitle}
           projectLabel={t("tab-project")}
           profileLabel={t("tab-profile")}
           systemLabel={t("tab-system")}
@@ -125,7 +131,7 @@ export default function App() {
               className="truncate text-sm tracking-wide text-primary"
               onClick={onHomeClick}
             >
-              {t("brand")}
+              {appTitle}
             </a>
           </div>
 
@@ -145,12 +151,15 @@ export default function App() {
                     ? t("tab-profile")
                     : t("tab-system")}
               </h1>
-              {currentView === "project" ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="hidden sm:inline">{appTitle}</span>
+                {currentView === "project" ? (
                   <span>{t("text-total", { count: explorer.statsTotal })}</span>
-                  {explorer.refreshing ? <Loader className="size-3.5 animate-spin" /> : null}
-                </div>
-              ) : null}
+                ) : null}
+                {currentView === "project" && explorer.refreshing ? (
+                  <Loader className="size-3.5 animate-spin" />
+                ) : null}
+              </div>
             </div>
 
             {currentView === "project" ? (

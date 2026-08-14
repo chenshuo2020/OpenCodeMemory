@@ -20,6 +20,14 @@ import {
   handlePluginCapture,
   handlePluginCommand,
   handlePluginContext,
+  handlePluginPrompt,
+  handleProfileLearningComplete,
+  handleProfileLearningPrepare,
+  handleProfileLearningRelease,
+  type PluginPromptRequest,
+  type ProfileLearningCompleteRequest,
+  type ProfileLearningPrepareRequest,
+  type ProfileLearningReleaseRequest,
   type PluginCommandRequest,
 } from "./plugin-rpc.js";
 
@@ -92,6 +100,41 @@ const requestHandler: WebServerRequestHandler = async (req, context) => {
       success: Boolean((result as { success?: boolean })?.success),
       error: (result as { error?: string })?.error,
     });
+    return json(result);
+  }
+
+  if (context.path === "/api/plugin/prompt" && context.method === "POST") {
+    const promptRequest = (await req.json()) as PluginPromptRequest;
+    const result = await handlePluginPrompt(promptRequest);
+    log("Bridge prompt request completed", {
+      directory: promptRequest.directory,
+      sessionID: promptRequest.sessionID,
+      messageID: promptRequest.messageID,
+      success: Boolean((result as { success?: boolean })?.success),
+      skipped: Boolean((result as { skipped?: boolean })?.skipped),
+      error: (result as { error?: string })?.error,
+    });
+    return json(result);
+  }
+
+  if (context.path === "/api/plugin/profile-learning/prepare" && context.method === "POST") {
+    const result = await handleProfileLearningPrepare(
+      (await req.json()) as ProfileLearningPrepareRequest
+    );
+    return json(result);
+  }
+
+  if (context.path === "/api/plugin/profile-learning/complete" && context.method === "POST") {
+    const result = await handleProfileLearningComplete(
+      (await req.json()) as ProfileLearningCompleteRequest
+    );
+    return json(result);
+  }
+
+  if (context.path === "/api/plugin/profile-learning/release" && context.method === "POST") {
+    const result = await handleProfileLearningRelease(
+      (await req.json()) as ProfileLearningReleaseRequest
+    );
     return json(result);
   }
 

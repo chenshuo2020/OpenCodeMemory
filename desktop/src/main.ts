@@ -124,7 +124,7 @@ async function isServiceHealthy(): Promise<boolean> {
 }
 
 function startDevelopmentService(): void {
-  if (developmentService && !developmentService.killed) return;
+  if (developmentService && developmentService.exitCode === null && !developmentService.killed) return;
   const command = serviceCommand();
   developmentService = spawn(command.file, command.args, {
     cwd: command.cwd,
@@ -160,6 +160,20 @@ async function waitForService(timeoutMs = 15000): Promise<boolean> {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return false;
+}
+
+async function waitForServiceStopped(timeoutMs = 10000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await isServiceHealthy())) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return !(await isServiceHealthy());
+}
+
+async function scheduledTaskExists(): Promise<boolean> {
+  const result = await runCommand("schtasks.exe", ["/Query", "/TN", TASK_NAME]);
+  return result.success;
 }
 
 async function installOpenCodeBridge(): Promise<void> {
@@ -199,9 +213,18 @@ async function registerCurrentUserService(): Promise<CommandResult> {
     return { success: true, output: "Development service does not use Task Scheduler." };
   }
   if (taskRegistrationAttempted) {
-    return taskRegistrationError
-      ? { success: false, output: taskRegistrationError }
-      : { success: true, output: "Current-user background service is registered." };
+    if (!taskRegistrationError) {
+      return { success: true, output: "Current-user background service is registered." };
+    }
+    // A transient PowerShell/UAC/task-scheduler error should not permanently
+    // disable the System panel buttons for the lifetime of this Electron process.
+    taskRegistrationAttempted = false;
+    taskRegistrationError = null;
+  }
+
+  if (await scheduledTaskExists()) {
+    taskRegistrationAttempted = true;
+    return { success: true, output: "Current-user background service is registered." };
   }
 
   taskRegistrationAttempted = true;
@@ -231,16 +254,53 @@ async function taskAction(action: "query" | "start" | "stop" | "restart"): Promi
     return { success: false, output: "The background service is only available on Windows." };
   }
 
-  if (action === "restart") {
-    await runCommand("schtasks.exe", ["/End", "/TN", TASK_NAME]);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    return runCommand("schtasks.exe", ["/Run", "/TN", TASK_NAME]);
-  }
   if (action === "query") {
     return runCommand("schtasks.exe", ["/Query", "/TN", TASK_NAME, "/FO", "LIST", "/V"]);
   }
-  const verb = action === "start" ? "/Run" : "/End";
-  return runCommand("schtasks.exe", [verb, "/TN", TASK_NAME]);
+
+  if (action === "start") {
+    if (await isServiceHealthy()) {
+      return { success: true, output: "OpenCode Memory service is already running." };
+    }
+    const result = await runCommand("schtasks.exe", ["/Run", "/TN", TASK_NAME]);
+    if (!result.success) return result;
+    const ready = await waitForService();
+    return ready
+      ? { success: true, output: "OpenCode Memory service started." }
+      : {
+          success: false,
+          output: `Task Scheduler accepted the start request, but the service did not become ready. ${result.output}`.trim(),
+        };
+  }
+
+  const stopResult = await runCommand("schtasks.exe", ["/End", "/TN", TASK_NAME]);
+  if (!stopResult.success) {
+    const stillHealthy = await isServiceHealthy();
+    if (stillHealthy) return stopResult;
+    if (action === "stop") {
+      return { success: true, output: "OpenCode Memory service is already stopped." };
+    }
+  }
+  const stopped = await waitForServiceStopped();
+  if (!stopped) {
+    return {
+      success: false,
+      output: `The service stop request was sent, but port ${SERVICE_PORT} is still responding.`,
+    };
+  }
+  if (action === "stop") {
+    return { success: true, output: "OpenCode Memory service stopped." };
+  }
+
+  const startResult = await runCommand("schtasks.exe", ["/Run", "/TN", TASK_NAME]);
+  if (!startResult.success) return startResult;
+  const ready = await waitForService();
+  return ready
+    ? { success: true, output: "OpenCode Memory service restarted." }
+    : {
+        success: false,
+        output: `The service restart request was sent, but the service did not become ready. ${startResult.output}`.trim(),
+      };
 }
 
 async function serviceAction(
@@ -249,17 +309,26 @@ async function serviceAction(
   if (!app.isPackaged) {
     if (action === "query") {
       return {
-        success: Boolean(developmentService && !developmentService.killed),
-        output: developmentService
+        success: Boolean(
+          developmentService && developmentService.exitCode === null && !developmentService.killed
+        ),
+        output: developmentService && developmentService.exitCode === null
           ? "Development service is running."
           : "Development service is stopped.",
       };
     }
     if (action === "stop") {
-      if (developmentService && !developmentService.killed) developmentService.kill();
+      if (developmentService && developmentService.exitCode === null && !developmentService.killed) {
+        developmentService.kill();
+      }
       return { success: true, output: "Development service stopped." };
     }
-    if (action === "restart" && developmentService && !developmentService.killed)
+    if (
+      action === "restart" &&
+      developmentService &&
+      developmentService.exitCode === null &&
+      !developmentService.killed
+    )
       developmentService.kill();
     startDevelopmentService();
     return { success: true, output: "Development service started." };
