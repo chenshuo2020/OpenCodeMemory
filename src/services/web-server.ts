@@ -23,8 +23,9 @@ import {
   handleRunDeduplication,
   handleDetectMigration,
   handleRunMigration,
-  handleDetectTagMigration,
-  handleRunTagMigrationBatch,
+  handleClaimTagMigration,
+  handleCompleteTagMigration,
+  handleFailTagMigration,
   handleGetTagMigrationProgress,
   handleDeletePrompt,
   handleBulkDeletePrompts,
@@ -76,16 +77,15 @@ function serveFetch(opts: {
   // Bodies stream both directions via the WHATWG Streams ↔ Node Streams
   // helpers that ship with Node 18+.
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    let destroyed = false;
-    const cleanup = () => {
-      if (destroyed) return;
-      destroyed = true;
-      if (!res.writableEnded) res.destroy();
-      if (!req.socket.destroyed) req.socket.destroy();
+    let clientDisconnected = false;
+    const markClientDisconnected = () => {
+      clientDisconnected = true;
     };
-    req.on("close", cleanup);
-    req.socket.on("error", cleanup);
-    req.socket.on("close", cleanup);
+    // IncomingMessage emits "close" after a normal request body has been
+    // consumed as well as after an abort. Destroying the response from that
+    // event made every JSON POST (including bridge RPC) lose its response.
+    req.on("aborted", markClientDisconnected);
+    req.socket.on("error", markClientDisconnected);
 
     try {
       const url = `http://${opts.hostname}:${opts.port}${req.url ?? "/"}`;
@@ -99,7 +99,7 @@ function serveFetch(opts: {
       });
 
       const webRes = await opts.fetch(webReq);
-      if (destroyed) return;
+      if (clientDisconnected || res.destroyed) return;
       res.statusCode = webRes.status;
       webRes.headers.forEach((value, name) => res.setHeader(name, value));
       res.setHeader("Connection", "close");
@@ -137,7 +137,10 @@ function serveFetch(opts: {
   // exclusive: false disables SO_EXCLUSIVEADDRUSE on Windows, allowing
   // rebind after a crashed predecessor left orphaned sockets behind.
   server.listen({ port: opts.port, host: opts.hostname, reuseAddr: true, exclusive: false });
-  server.unref();
+  // The plugin host should not be kept alive solely by its optional web
+  // server, but the standalone Windows background service must remain alive
+  // while it owns the HTTP listener.
+  if (process.env.OPENCODE_MEM_SERVICE !== "1") server.unref();
   server.timeout = 30000;
   server.keepAliveTimeout = 10000;
   server.headersTimeout = 11000;
@@ -156,12 +159,25 @@ function serveFetch(opts: {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-interface WebServerConfig {
+export interface WebServerRequestContext {
+  path: string;
+  method: string;
+  url: URL;
+}
+
+export type WebServerRequestHandler = (
+  req: Request,
+  context: WebServerRequestContext
+) => Promise<Response | undefined> | Response | undefined;
+
+export interface WebServerConfig {
   port: number;
   host: string;
   enabled: boolean;
   auth?: WebAuth;
   apiToken?: string;
+  requestHandler?: WebServerRequestHandler;
+  healthProvider?: () => Promise<Record<string, unknown>> | Record<string, unknown>;
 }
 
 export class WebServer {
@@ -358,11 +374,20 @@ export class WebServer {
 
     try {
       if (path === "/api/health" && method === "GET") {
+        const extraHealth = this.config.healthProvider
+          ? await this.config.healthProvider()
+          : undefined;
         return this.jsonResponse({
           success: true,
           status: "ok",
           authEnabled: auth?.isEnabled() ?? false,
+          ...(extraHealth ?? {}),
         });
+      }
+
+      if (this.config.requestHandler) {
+        const additionalResponse = await this.config.requestHandler(req, { path, method, url });
+        if (additionalResponse) return additionalResponse;
       }
 
       if (path === "/" || path === "/index.html") {
@@ -484,19 +509,25 @@ export class WebServer {
         return this.jsonResponse(result);
       }
 
-      if (path === "/api/migration/tags/detect" && method === "GET") {
-        const result = await handleDetectTagMigration();
+      if (path === "/api/migration/tags/claim" && method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as any;
+        const result = await handleClaimTagMigration(body);
         return this.jsonResponse(result);
       }
 
-      if (path === "/api/migration/tags/run-batch" && method === "POST") {
-        const body = (await req.json()) as any;
-        const batchSize = body?.batchSize || 5;
-        const result = await handleRunTagMigrationBatch(batchSize);
+      if (path === "/api/migration/tags/complete" && method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as any;
+        const result = await handleCompleteTagMigration(body);
         return this.jsonResponse(result);
       }
 
-      if (path === "/api/migration/tags/progress" && method === "GET") {
+      if (path === "/api/migration/tags/fail" && method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as any;
+        const result = await handleFailTagMigration(body);
+        return this.jsonResponse(result);
+      }
+
+      if (path === "/api/migration/tags/status" && method === "GET") {
         const result = await handleGetTagMigrationProgress();
         return this.jsonResponse(result);
       }

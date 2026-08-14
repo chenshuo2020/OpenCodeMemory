@@ -23,8 +23,6 @@ export function useMemoriesExplorer() {
   const [migrationNeeded, setMigrationNeeded] = useState(false);
   const [migrationMessage, setMigrationMessage] = useState("");
   const [migrationConfirmed, setMigrationConfirmed] = useState(false);
-  const [tagMigrationOpen, setTagMigrationOpen] = useState(false);
-  const [tagMigrationCount, setTagMigrationCount] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [editId, setEditId] = useState("");
   const [editContent, setEditContent] = useState("");
@@ -128,14 +126,6 @@ export function useMemoriesExplorer() {
         })
       );
       setMigrationNeeded(true);
-    }
-
-    const tagResult = await fetchAPI<{ needsMigration: boolean; count: number }>(
-      "/api/migration/tags/detect"
-    );
-    if (tagResult.success && tagResult.data?.needsMigration) {
-      setTagMigrationCount(tagResult.data.count);
-      setTagMigrationOpen(true);
     }
   }, []);
 
@@ -423,9 +413,6 @@ export function useMemoriesExplorer() {
     migrationMessage,
     migrationConfirmed,
     setMigrationConfirmed,
-    tagMigrationOpen,
-    setTagMigrationOpen,
-    tagMigrationCount,
     editOpen,
     setEditOpen,
     editContent,

@@ -1,0 +1,102 @@
+{
+  "name": "opencode-memory-desktop",
+  "private": true,
+  "version": "1.0.6",
+  "description": "Offline memory service and desktop manager for OpenCode.",
+  "author": "OpenCode Memory contributors",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "electron": "36.4.0",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.8.3"
+  },
+  "build": {
+    "appId": "com.opencode.memory",
+    "productName": "OpenCode Memory",
+    "electronVersion": "36.4.0",
+    "electronDist": "node_modules/electron/dist",
+    "asar": true,
+    "files": [
+      "dist/main.js",
+      "dist/preload.js",
+      "package.json"
+    ],
+    "extraFiles": [
+      {
+        "from": "../installer/install-root-marker.txt",
+        "to": ".opencode-memory-install-root"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "../installer/staging/service",
+        "to": "service",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../installer/staging/service/node_modules",
+        "to": "service/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../artifacts/model-cache",
+        "to": "models",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../installer/runtime",
+        "to": "runtime",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../installer/staging/service-wrapper",
+        "to": "service-wrapper",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../artifacts/plugin/opencode-mem.js",
+        "to": "plugin/opencode-mem.js"
+      }
+    ],
+    "win": {
+      "signExecutable": false,
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "OpenCodeMemory-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OpenCode Memory",
+      "include": "../installer/installer.nsh"
+    }
+  }
+}

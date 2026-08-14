@@ -4,6 +4,7 @@ export const translations = {
     brand: "opencode-mem",
     "tab-project": "PROJECT MEMORIES",
     "tab-profile": "USER PROFILE",
+    "tab-system": "SYSTEM",
     "nav-menu": "Menu",
     "nav-close": "Close menu",
     "nav-language": "Language",
@@ -36,11 +37,9 @@ export const translations = {
     "opt-analysis": "analysis",
     "opt-configuration": "configuration",
     "modal-edit-title": "Edit Memory",
-    "modal-migration-title": "Memory Tagging Migration",
     "modal-changelog-title": "Profile Version History",
     "btn-cancel": "Cancel",
     "btn-save": "Save Changes",
-    "btn-start-migration": "Start Migration",
     "loading-init": "Initializing...",
     "loading-profile": "Loading profile...",
     "loading-changelog": "Loading changelog...",
@@ -49,8 +48,6 @@ export const translations = {
       "I understand this operation is irreversible and will affect all stored memories",
     "btn-fresh-start": "Fresh Start (Delete All)",
     "btn-reembed": "Re-embed (Preserve Data)",
-    "migration-note":
-      "Please don't close the browser. This will re-vectorize your memories with technical tags to improve search accuracy.",
     "placeholder-search": "Search memories...",
     "placeholder-tags": "react, hooks, auth (comma separated)",
     "placeholder-content": "Enter memory content...",
@@ -140,8 +137,16 @@ export const translations = {
     "label-ai-cleanup-select-same-cat": "Same Category Pairs",
     "label-ai-cleanup-analyze": "Analyze Selected",
     "label-ai-cleanup-selected": "{count} selected",
-    "migration-found-tags": "Found {count} memories needing technical tags.",
-    "migration-stopped": "Migration stopped: maximum attempts reached",
+    "tag-migration-title": "Legacy memory tags",
+    "tag-migration-pending": "automatic migration pending",
+    "tag-migration-current": "up to date",
+    "tag-migration-description":
+      "Missing technical tags are migrated automatically after an OpenCode conversation becomes idle. The bridge reuses that conversation's provider and model, then the local embedding model rebuilds the searchable vectors. No confirmation dialog or manual start action is required.",
+    "tag-migration-waiting": "Waiting",
+    "tag-migration-active": "In progress",
+    "tag-migration-deferred": "Retrying later",
+    "tag-migration-unavailable": "Migration status is temporarily unavailable.",
+    "tag-migration-last-error": "Last retry reason: {error}",
     "migration-shards-mismatch": "{count} shard(s) have different dimensions",
     "migration-dimension-mismatch": "dimension mismatch detected",
     "migration-mismatch-details":
@@ -185,11 +190,9 @@ export const translations = {
     "opt-analysis": "分析 (analysis)",
     "opt-configuration": "配置 (configuration)",
     "modal-edit-title": "编辑记忆",
-    "modal-migration-title": "记忆标签迁移",
     "modal-changelog-title": "画像版本历史",
     "btn-cancel": "取消",
     "btn-save": "保存更改",
-    "btn-start-migration": "开始迁移",
     "loading-init": "初始化中...",
     "loading-profile": "加载画像中...",
     "loading-changelog": "加载更新日志中...",
@@ -197,7 +200,6 @@ export const translations = {
     "migration-understand": "我了解此操作不可逆，并将影响所有存储的记忆",
     "btn-fresh-start": "重新开始 (删除所有)",
     "btn-reembed": "重新向量化 (保留数据)",
-    "migration-note": "请不要关闭浏览器。这将使用技术标签重新向量化您的记忆，以提高搜索准确性。",
     "placeholder-search": "搜索记忆...",
     "placeholder-tags": "react, hooks, auth (逗号分隔)",
     "placeholder-content": "输入记忆内容...",
@@ -288,8 +290,16 @@ export const translations = {
     "label-ai-cleanup-analyze": "分析选中项",
     "label-ai-cleanup-selected": "已选 {count} 项",
     "profile-actions": "操作",
-    "migration-found-tags": "发现 {count} 条需要技术标签的记忆。",
-    "migration-stopped": "迁移已停止：达到最大尝试次数",
+    "tag-migration-title": "旧记忆技术标签",
+    "tag-migration-pending": "正在后台自动迁移",
+    "tag-migration-current": "已是最新状态",
+    "tag-migration-description":
+      "缺少技术标签的旧记忆会在 OpenCode 对话空闲后自动迁移。桥接会继承该对话实际使用的 Provider 和模型，再由本地 Embedding 模型重建可搜索向量；无需弹窗确认或手动开始。",
+    "tag-migration-waiting": "等待处理",
+    "tag-migration-active": "正在处理",
+    "tag-migration-deferred": "稍后重试",
+    "tag-migration-unavailable": "暂时无法读取迁移状态。",
+    "tag-migration-last-error": "最近一次重试原因：{error}",
     "migration-shards-mismatch": "{count} 个分片具有不同的维度",
     "migration-dimension-mismatch": "检测到维度不匹配",
     "migration-mismatch-details":
@@ -338,12 +348,10 @@ export const translations = {
     "opt-configuration": "إعدادات",
 
     "modal-edit-title": "تعديل الذكرى",
-    "modal-migration-title": "ترحيل وسوم الذكريات",
     "modal-changelog-title": "سجل إصدارات الملف الشخصي",
 
     "btn-cancel": "إلغاء",
     "btn-save": "حفظ التغييرات",
-    "btn-start-migration": "بدء الترحيل",
 
     "loading-init": "جاري التهيئة...",
     "loading-profile": "جاري تحميل الملف الشخصي...",
@@ -355,9 +363,6 @@ export const translations = {
 
     "btn-fresh-start": "بداية جديدة (حذف الكل)",
     "btn-reembed": "إعادة إنشاء المتجهات (مع الاحتفاظ بالبيانات)",
-
-    "migration-note":
-      "يرجى عدم إغلاق المتصفح. سيتم إعادة فهرسة الذكريات باستخدام وسوم تقنية لتحسين دقة البحث.",
 
     "placeholder-search": "ابحث في الذكريات...",
     "placeholder-tags": "react, hooks, auth (مفصولة بفواصل)",
@@ -471,9 +476,16 @@ export const translations = {
     "label-ai-cleanup-analyze": "تحليل المحدد",
     "label-ai-cleanup-selected": "{count} محدد",
 
-    "migration-found-tags": "تم العثور على {count} من الذكريات التي تحتاج إلى وسوم تقنية.",
-
-    "migration-stopped": "تم إيقاف الترحيل: تم الوصول إلى الحد الأقصى للمحاولات",
+    "tag-migration-title": "وسوم الذكريات القديمة",
+    "tag-migration-pending": "ترحيل تلقائي قيد الانتظار",
+    "tag-migration-current": "محدّث",
+    "tag-migration-description":
+      "تُرحَّل الذكريات القديمة التي لا تحتوي على وسوم تقنية تلقائياً بعد خمول محادثة OpenCode. يعيد الجسر استخدام المزوّد والطراز الفعليين للمحادثة، ثم يعيد نموذج التضمين المحلي بناء المتجهات القابلة للبحث. لا يلزم تأكيد أو بدء يدوي.",
+    "tag-migration-waiting": "بانتظار المعالجة",
+    "tag-migration-active": "قيد المعالجة",
+    "tag-migration-deferred": "إعادة المحاولة لاحقاً",
+    "tag-migration-unavailable": "حالة الترحيل غير متاحة مؤقتاً.",
+    "tag-migration-last-error": "سبب آخر إعادة محاولة: {error}",
 
     "migration-shards-mismatch": "{count} من الأجزاء تحتوي على أبعاد مختلفة",
 

@@ -7,7 +7,7 @@ import { AppSidebar } from "$lib/components/explorer/AppSidebar";
 import { EditMemoryDialog } from "$lib/components/explorer/EditMemoryDialog";
 import { MemoryList } from "$lib/components/explorer/MemoryList";
 import { ProfileView } from "$lib/components/explorer/ProfileView";
-import { TagMigrationDialog } from "$lib/components/explorer/TagMigrationDialog";
+import { SystemView } from "$lib/components/explorer/SystemView";
 import { Alert, AlertDescription } from "$lib/components/ui/alert";
 import { Button } from "$lib/components/ui/button";
 import { Checkbox } from "$lib/components/ui/checkbox";
@@ -102,6 +102,7 @@ export default function App() {
           brand={t("brand")}
           projectLabel={t("tab-project")}
           profileLabel={t("tab-profile")}
+          systemLabel={t("tab-system")}
           langLabel={langLabel}
           languageLabel={t("nav-language")}
           themeLabel={t("nav-theme")}
@@ -138,7 +139,11 @@ export default function App() {
 
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h1 className="text-base tracking-wide text-primary">
-                {currentView === "project" ? t("tab-project") : t("tab-profile")}
+                {currentView === "project"
+                  ? t("tab-project")
+                  : currentView === "profile"
+                    ? t("tab-profile")
+                    : t("tab-system")}
               </h1>
               {currentView === "project" ? (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -341,13 +346,15 @@ export default function App() {
                   </form>
                 </section>
               </>
-            ) : (
+            ) : currentView === "profile" ? (
               <ProfileView
                 profile={profile.userProfile}
                 loading={profile.loadingProfile}
                 onRefresh={profile.refreshProfile}
                 onCleanup={() => profile.setAiCleanupOpen(true)}
               />
+            ) : (
+              <SystemView />
             )}
           </div>
         </div>
@@ -358,15 +365,6 @@ export default function App() {
         onOpenChange={explorer.setEditOpen}
         content={explorer.editContent}
         onSave={explorer.saveEdit}
-      />
-      <TagMigrationDialog
-        open={explorer.tagMigrationOpen}
-        onOpenChange={explorer.setTagMigrationOpen}
-        count={explorer.tagMigrationCount}
-        onComplete={() => {
-          void explorer.loadMemories();
-          void explorer.loadStats();
-        }}
       />
       <AiCleanupDialog
         open={profile.aiCleanupOpen}

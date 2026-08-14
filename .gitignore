@@ -4,6 +4,11 @@ node_modules
 # output
 out
 dist
+artifacts
+desktop/dist
+desktop/release
+installer/runtime
+installer/staging
 *.tgz
 
 # code coverage

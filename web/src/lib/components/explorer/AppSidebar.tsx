@@ -1,5 +1,5 @@
 import type { MouseEvent } from "react";
-import { Folder, Languages, Moon, Sun, User, X } from "lucide-react";
+import { Folder, Languages, Moon, Settings, Sun, User, X } from "lucide-react";
 import { GithubIcon } from "$lib/components/icons/GithubIcon";
 import { Button } from "$lib/components/ui/button";
 import { Separator } from "$lib/components/ui/separator";
@@ -13,6 +13,7 @@ type Props = {
   brand: string;
   projectLabel: string;
   profileLabel: string;
+  systemLabel: string;
   langLabel: string;
   languageLabel: string;
   themeLabel: string;
@@ -27,6 +28,7 @@ export function AppSidebar({
   brand,
   projectLabel,
   profileLabel,
+  systemLabel,
   langLabel,
   languageLabel,
   themeLabel,
@@ -132,6 +134,15 @@ export function AppSidebar({
           >
             <User className="size-4 shrink-0" />
             <span className="truncate text-start">{profileLabel}</span>
+          </a>
+          <a
+            href={ROUTES.system}
+            className={navClass(currentView === "system")}
+            aria-current={currentView === "system" ? "page" : undefined}
+            onClick={(e) => onNavClick(e, ROUTES.system)}
+          >
+            <Settings className="size-4 shrink-0" />
+            <span className="truncate text-start">{systemLabel}</span>
           </a>
         </nav>
 

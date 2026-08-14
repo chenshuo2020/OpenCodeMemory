@@ -5,6 +5,16 @@ export type { ApiResult };
 declare global {
   interface Window {
     __OPENCODE_MEM_TOKEN__?: string;
+    opencodeMemDesktop?: {
+      service: {
+        query: () => Promise<{ success: boolean; output?: string }>;
+        start: () => Promise<{ success: boolean; output?: string }>;
+        stop: () => Promise<{ success: boolean; output?: string }>;
+        restart: () => Promise<{ success: boolean; output?: string }>;
+      };
+      getServiceUrl: () => Promise<string>;
+      openBrowser: () => Promise<void>;
+    };
   }
 }
 

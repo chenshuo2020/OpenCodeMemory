@@ -13,6 +13,16 @@ const TIMEOUT_MS = 30000;
 const GLOBAL_EMBEDDING_KEY = Symbol.for("opencode-mem.embedding.instance");
 const MAX_CACHE_SIZE = 100;
 
+export type EmbeddingRuntimeStatus = {
+  ready: boolean;
+  initializing: boolean;
+  model: string;
+  dimensions: number;
+  backend: "local" | "remote";
+  cacheDir: string;
+  error: string | null;
+};
+
 export type EmbeddingTask = "document" | "query";
 
 export type EmbedOptions = {
@@ -40,6 +50,19 @@ export function applyEmbeddingTaskPrefix(
 }
 
 type HfTransformers = typeof import("@huggingface/transformers");
+type TransformerDtype =
+  "auto" | "bnb4" | "fp16" | "fp32" | "int8" | "q4" | "q4f16" | "q8" | "uint8";
+const TRANSFORMER_DTYPES = new Set<TransformerDtype>([
+  "auto",
+  "bnb4",
+  "fp16",
+  "fp32",
+  "int8",
+  "q4",
+  "q4f16",
+  "q8",
+  "uint8",
+]);
 
 let _transformers: {
   pipeline: HfTransformers["pipeline"];
@@ -51,6 +74,19 @@ function getTransformersPackageSpecifier(): string {
   // traverse @huggingface/transformers internals during plugin startup. The package
   // is only needed for the local embedding backend, and should stay lazy.
   return ["@huggingface", "transformers"].join("/");
+}
+
+function getEmbeddingCacheDir(): string {
+  return process.env.OPENCODE_MEM_MODEL_CACHE || join(CONFIG.storagePath, ".cache");
+}
+
+function getConfiguredModelDtype(): TransformerDtype | undefined {
+  const value = process.env.OPENCODE_MEM_MODEL_DTYPE;
+  if (!value) return undefined;
+  if (!TRANSFORMER_DTYPES.has(value as TransformerDtype)) {
+    throw new Error(`Unsupported OPENCODE_MEM_MODEL_DTYPE: ${value}`);
+  }
+  return value as TransformerDtype;
 }
 
 async function ensureTransformersLoaded(): Promise<NonNullable<typeof _transformers>> {
@@ -80,8 +116,12 @@ async function ensureTransformersLoaded(): Promise<NonNullable<typeof _transform
   prepareOnnxruntimeForTransformers();
   const mod = requireFromHere(transformersEntry) as HfTransformers;
   mod.env.allowLocalModels = true;
-  mod.env.allowRemoteModels = true;
-  mod.env.cacheDir = join(CONFIG.storagePath, ".cache");
+  // The packaged Windows build ships a verified model cache. In that mode a
+  // missing file must surface as a repairable error instead of a surprise
+  // network download during an OpenCode request.
+  mod.env.allowRemoteModels = process.env.OPENCODE_MEM_REQUIRE_BUNDLED_MODEL !== "1";
+  mod.env.cacheDir = getEmbeddingCacheDir();
+  mod.env.localModelPath = getEmbeddingCacheDir();
   // Keep ONNX WASM single-threaded for Bun/Node runtimes without SharedArrayBuffer.
   try {
     (mod.env as any).backends.onnx.wasm.numThreads = 1;
@@ -164,8 +204,13 @@ export class EmbeddingService {
 
       // Local model path
       const { pipeline } = await ensureTransformersLoaded();
+      const dtype = getConfiguredModelDtype();
       this.pipe = await pipeline("feature-extraction", CONFIG.embeddingModel, {
         progress_callback: progressCallback,
+        ...(process.env.OPENCODE_MEM_MODEL_REVISION
+          ? { revision: process.env.OPENCODE_MEM_MODEL_REVISION }
+          : {}),
+        ...(dtype ? { dtype } : {}),
       });
       this.isWarmedUp = true;
       this.initError = null;
@@ -234,6 +279,32 @@ export class EmbeddingService {
 
   async embedWithTimeout(text: string, options?: EmbedOptions): Promise<Float32Array> {
     return withTimeout(this.embed(text, options), TIMEOUT_MS);
+  }
+
+  getStatus(): EmbeddingRuntimeStatus {
+    return {
+      ready: this.isWarmedUp,
+      initializing: this.initPromise !== null && !this.isWarmedUp,
+      model: CONFIG.embeddingModel,
+      dimensions: CONFIG.embeddingDimensions,
+      backend: CONFIG.embeddingApiUrl && CONFIG.embeddingApiKey ? "remote" : "local",
+      cacheDir: getEmbeddingCacheDir(),
+      error: this.initError,
+    };
+  }
+
+  async selfTest(): Promise<{ dimensions: number; finite: boolean }> {
+    const vector = await this.embedWithTimeout("OpenCode Memory embedding self-test");
+    const finite = vector.length > 0 && vector.every((value) => Number.isFinite(value));
+    if (!finite) {
+      throw new Error("Embedding self-test returned an empty or non-finite vector");
+    }
+    if (vector.length !== CONFIG.embeddingDimensions) {
+      throw new Error(
+        `Embedding self-test returned ${vector.length} dimensions; expected ${CONFIG.embeddingDimensions}`
+      );
+    }
+    return { dimensions: vector.length, finite };
   }
 
   clearCache(): void {

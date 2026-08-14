@@ -7,6 +7,12 @@ import { formatTagsForEmbedding } from "./turso/vector-utils.js";
 import { extractScopeFromContainerTag, tryExtractScopeFromContainerTag } from "./memory-scope.js";
 import { log } from "./logger.js";
 import { CONFIG } from "../config.js";
+import {
+  claimNextTagMigration,
+  completeTagMigrationClaim,
+  failTagMigrationClaim,
+  getTagMigrationStatus,
+} from "./tag-migration-service.js";
 import type { MemoryType } from "../types/index.js";
 import { userPromptManager } from "./user-prompt/user-prompt-manager.js";
 import type { UserProfileData } from "./user-profile/types.js";
@@ -1402,148 +1408,70 @@ export async function handleDetectTagMigration(): Promise<
   ApiResponse<{ needsMigration: boolean; count: number }>
 > {
   try {
-    await ensureTursoReady();
-    const projectShards = await tursoShardManager.getAllShards("project", "");
-    let untaggedCount = 0;
-    for (const shard of projectShards) {
-      const db = await tursoConnectionManager.getConnection(shard.dbPath);
-      const row = await db.get(
-        "SELECT COUNT(*) as count FROM memories WHERE tags IS NULL OR tags = ''"
-      );
-      untaggedCount += Number(row?.count ?? 0);
-    }
-    return { success: true, data: { needsMigration: untaggedCount > 0, count: untaggedCount } };
+    const status = await getTagMigrationStatus();
+    return {
+      success: true,
+      data: { needsMigration: status.pending > 0, count: status.pending },
+    };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
-interface MigrationProgress {
-  processed: number;
-  total: number;
-  currentBatch: number;
-  totalBatches: number;
-  isComplete: boolean;
-  errors: string[];
-}
-
-let migrationProgress: MigrationProgress = {
-  processed: 0,
-  total: 0,
-  currentBatch: 0,
-  totalBatches: 0,
-  isComplete: true,
-  errors: [],
-};
-
-export async function handleGetTagMigrationProgress(): Promise<ApiResponse<MigrationProgress>> {
-  return { success: true, data: migrationProgress };
-}
-
-export async function handleRunTagMigrationBatch(
-  batchSize: number = 5
-): Promise<ApiResponse<{ processed: number; total: number; hasMore: boolean }>> {
+export async function handleGetTagMigrationProgress(): Promise<
+  ApiResponse<Awaited<ReturnType<typeof getTagMigrationStatus>>>
+> {
   try {
-    await ensureTursoReady();
-    const { AIProviderFactory } = await import("./ai/ai-provider-factory.js");
-    const { buildMemoryProviderConfig } = await import("./ai/provider-config.js");
-    const providerConfig = buildMemoryProviderConfig(CONFIG, {
-      maxIterations: 1,
-      iterationTimeout: 30000,
-    });
-    const provider = AIProviderFactory.createProvider(CONFIG.memoryProvider, providerConfig);
-    const projectShards = await tursoShardManager.getAllShards("project", "");
+    return { success: true, data: await getTagMigrationStatus() };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
 
-    let batchProcessed = 0;
-    const allMemories: { memory: any; shard: any }[] = [];
+export async function handleClaimTagMigration(request: {
+  workerId?: unknown;
+}): Promise<ApiResponse<{ claim: Awaited<ReturnType<typeof claimNextTagMigration>> }>> {
+  try {
+    const workerId = typeof request.workerId === "string" ? request.workerId : "";
+    if (!workerId.trim()) return { success: false, error: "workerId required" };
+    return { success: true, data: { claim: await claimNextTagMigration(workerId) } };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
 
-    for (const shard of projectShards) {
-      const db = await tursoConnectionManager.getConnection(shard.dbPath);
-      const memories = await db.all("SELECT * FROM memories");
-      for (const m of memories) {
-        allMemories.push({ memory: m, shard });
-      }
+export async function handleCompleteTagMigration(request: {
+  workerId?: unknown;
+  claimId?: unknown;
+  tags?: unknown;
+}): Promise<ApiResponse<{ memoryId: string; tags: string[] }>> {
+  try {
+    const workerId = typeof request.workerId === "string" ? request.workerId : "";
+    const claimId = typeof request.claimId === "string" ? request.claimId : "";
+    const tags = Array.isArray(request.tags) ? request.tags : [];
+    if (!workerId.trim() || !claimId.trim()) {
+      return { success: false, error: "workerId and claimId required" };
     }
+    return { success: true, data: await completeTagMigrationClaim({ workerId, claimId, tags }) };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
 
-    if (migrationProgress.total === 0) {
-      migrationProgress.total = allMemories.length;
-      migrationProgress.totalBatches = Math.ceil(allMemories.length / batchSize);
-      migrationProgress.isComplete = false;
+export async function handleFailTagMigration(request: {
+  workerId?: unknown;
+  claimId?: unknown;
+  error?: unknown;
+}): Promise<ApiResponse> {
+  try {
+    const workerId = typeof request.workerId === "string" ? request.workerId : "";
+    const claimId = typeof request.claimId === "string" ? request.claimId : "";
+    const error = typeof request.error === "string" ? request.error : "Unknown model error";
+    if (!workerId.trim() || !claimId.trim()) {
+      return { success: false, error: "workerId and claimId required" };
     }
-
-    const startIdx = migrationProgress.processed;
-    const endIdx = Math.min(startIdx + batchSize, allMemories.length);
-
-    for (let i = startIdx; i < endIdx; i++) {
-      const item = allMemories[i];
-      if (!item) continue;
-      const { memory: m, shard } = item;
-      const db = await tursoConnectionManager.getConnection(shard.dbPath);
-
-      try {
-        let currentTags = m.tags
-          ? m.tags
-              .split(",")
-              .map((t: string) => t.trim().toLowerCase())
-              .filter((t: string) => t)
-          : [];
-
-        if (currentTags.length === 0) {
-          const prompt = `Generate 2-4 short technical tags for this memory content:\n\n${m.content}\n\nReturn ONLY a comma-separated list of tags.`;
-          const result = await provider.executeToolCall(
-            "You are a technical tagger.",
-            prompt,
-            {
-              type: "function",
-              function: {
-                name: "save_tags",
-                description: "Save generated tags",
-                parameters: {
-                  type: "object",
-                  properties: { tags: { type: "array", items: { type: "string" } } },
-                  required: ["tags"],
-                },
-              },
-            },
-            `migration_${m.id}`
-          );
-          if (result.success && result.data?.tags) {
-            currentTags = result.data.tags;
-            await db.run("UPDATE memories SET tags = ? WHERE id = ?", [
-              currentTags.join(","),
-              m.id,
-            ]);
-          }
-        }
-
-        const vector = await embeddingService.embedWithTimeout(m.content, { task: "document" });
-        const tagsVector = currentTags.length
-          ? await embeddingService.embedWithTimeout(formatTagsForEmbedding(currentTags), {
-              task: "document",
-            })
-          : undefined;
-        await tursoVectorSearch.updateVector(db, m.id, vector, tagsVector);
-
-        migrationProgress.processed++;
-        batchProcessed++;
-      } catch (e) {
-        const errorMsg = String(e);
-        migrationProgress.errors.push(errorMsg);
-        log("Migration error for memory", { id: m.id, error: errorMsg });
-      }
-    }
-
-    migrationProgress.currentBatch++;
-    const hasMore = migrationProgress.processed < migrationProgress.total;
-
-    if (!hasMore) {
-      migrationProgress.isComplete = true;
-    }
-
-    return {
-      success: true,
-      data: { processed: migrationProgress.processed, total: migrationProgress.total, hasMore },
-    };
+    await failTagMigrationClaim({ workerId, claimId, error });
+    return { success: true };
   } catch (error) {
     return { success: false, error: String(error) };
   }

@@ -593,9 +593,13 @@ export function normalizeAutoCaptureMaxContextBytes(value: number): number {
 
 function buildConfig(fileConfig: OpenCodeMemConfig) {
   const memoryApiKey = resolveSecretValue(fileConfig.memoryApiKey);
-  const embeddingDimensions =
-    fileConfig.embeddingDimensions ??
-    getEmbeddingDimensions(fileConfig.embeddingModel ?? DEFAULTS.embeddingModel);
+  const bundledModelRequired = process.env.OPENCODE_MEM_REQUIRE_BUNDLED_MODEL === "1";
+  const embeddingModel = bundledModelRequired
+    ? process.env.OPENCODE_MEM_BUNDLED_MODEL || DEFAULTS.embeddingModel
+    : (fileConfig.embeddingModel ?? DEFAULTS.embeddingModel);
+  const embeddingDimensions = bundledModelRequired
+    ? Number(process.env.OPENCODE_MEM_BUNDLED_MODEL_DIMENSIONS || DEFAULTS.embeddingDimensions)
+    : (fileConfig.embeddingDimensions ?? getEmbeddingDimensions(embeddingModel));
   const autoCaptureMaxContextBytes = normalizeAutoCaptureMaxContextBytes(
     fileConfig.autoCaptureMaxContextBytes ?? DEFAULTS.autoCaptureMaxContextBytes
   );
@@ -619,14 +623,15 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
     storagePath: expandPath(fileConfig.storagePath ?? DEFAULTS.storagePath),
     userEmailOverride: fileConfig.userEmailOverride,
     userNameOverride: fileConfig.userNameOverride,
-    embeddingModel: fileConfig.embeddingModel ?? DEFAULTS.embeddingModel,
+    embeddingModel,
     embeddingDimensions,
     embeddingUseTaskPrefixes:
       fileConfig.embeddingUseTaskPrefixes ?? DEFAULTS.embeddingUseTaskPrefixes,
-    embeddingApiUrl: fileConfig.embeddingApiUrl,
-    embeddingApiKey: fileConfig.embeddingApiUrl
-      ? resolveSecretValue(fileConfig.embeddingApiKey ?? process.env.OPENAI_API_KEY)
-      : undefined,
+    embeddingApiUrl: bundledModelRequired ? undefined : fileConfig.embeddingApiUrl,
+    embeddingApiKey:
+      !bundledModelRequired && fileConfig.embeddingApiUrl
+        ? resolveSecretValue(fileConfig.embeddingApiKey ?? process.env.OPENAI_API_KEY)
+        : undefined,
     similarityThreshold: fileConfig.similarityThreshold ?? DEFAULTS.similarityThreshold,
     maxMemories: fileConfig.maxMemories ?? DEFAULTS.maxMemories,
     maxProfileItems: fileConfig.maxProfileItems ?? DEFAULTS.maxProfileItems,
